@@ -1,0 +1,322 @@
+package com.project.gugumarket.service;
+
+import com.project.gugumarket.NotificationType;
+import com.project.gugumarket.dto.NotificationDto;
+import com.project.gugumarket.entity.*;
+import com.project.gugumarket.repository.NotificationRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class NotificationService {
+
+    private final NotificationRepository notificationRepository;
+    private final SimpMessagingTemplate messagingTemplate;  // ✅ 추가
+
+    /**
+     * 찜 알림 생성
+     * - 판매자에게 누가 상품을 찜했는지 알림
+     */
+    @Transactional
+    public Notification createLikeNotification(Like like) {
+        User seller = like.getProduct().getSeller();
+        User liker = like.getUser();
+        Product product = like.getProduct();
+
+        if (seller.getUserId().equals(liker.getUserId())) {
+            log.info("자기 상품 찜 - 알림 생성하지 않음");
+            return null;
+        }
+
+        String message = String.format("%s님이 '%s' 상품을 찜했습니다.",
+                liker.getNickname(),
+                product.getTitle());
+
+        Notification notification = Notification.builder()
+                .receiver(seller)
+                .sender(liker)
+                .product(product)
+                .type(NotificationType.LIKE)
+                .message(message)
+                .url("/products/" + product.getProductId())
+                .isRead(false)
+                .build();
+
+        Notification saved = notificationRepository.save(notification);
+        log.info("찜 알림 생성 완료 - ID: {}, 판매자: {}, 찜한 사람: {}",
+                saved.getNotificationId(), seller.getNickname(), liker.getNickname());
+
+        // ✅ 여기 한 줄 추가
+        sendRealtimeNotification(saved);
+
+        return saved;
+    }
+
+    /**
+     * 구매 알림 생성
+     * - 판매자에게 누가 무엇을 구매했는지 알림
+     */
+    @Transactional
+    public Notification createPurchaseNotification(Transaction transaction) {
+        User seller = transaction.getSeller();
+        User buyer = transaction.getBuyer();
+        Product product = transaction.getProduct();
+
+        String message = String.format("%s님이 '%s' 상품을 구매했습니다. (입금자명: %s)",
+                buyer.getNickname(),
+                product.getTitle(),
+                transaction.getDepositorName() != null ? transaction.getDepositorName() : "미입력");
+
+        Notification notification = Notification.builder()
+                .receiver(seller)
+                .sender(buyer)
+                .product(product)
+                .transaction(transaction)
+                .type(NotificationType.PURCHASE)
+                .message(message)
+                .url("/transactions/" + transaction.getTransactionId())
+                .isRead(false)
+                .build();
+
+        Notification saved = notificationRepository.save(notification);
+        log.info("구매 알림 생성 완료 - ID: {}, 판매자: {}, 구매자: {}",
+                saved.getNotificationId(), seller.getNickname(), buyer.getNickname());
+
+        sendRealtimeNotification(saved);
+        return saved;
+    }
+
+    /**
+     * 거래 완료 알림 생성
+     */
+    @Transactional
+    public Notification createTransactionCompleteNotification(Transaction transaction) {
+        User seller = transaction.getSeller();
+        User buyer = transaction.getBuyer();
+        Product product = transaction.getProduct();
+
+        String message = String.format("%s님과 '%s' 상품 거래가 완료되었습니다.",
+                buyer.getNickname(),
+                product.getTitle());
+
+        Notification notification = Notification.builder()
+                .receiver(seller)
+                .sender(buyer)
+                .product(product)
+                .transaction(transaction)
+                .type(NotificationType.TRANSACTION)
+                .message(message)
+                .url("/transactions/" + transaction.getTransactionId())
+                .isRead(false)
+                .build();
+
+        Notification saved = notificationRepository.save(notification);
+        log.info("거래 완료 알림 생성 완료 - ID: {}", saved.getNotificationId());
+
+        sendRealtimeNotification(saved);
+        return saved;
+    }
+
+    /**
+     * 댓글 알림 생성
+     */
+    @Transactional
+    public Notification createCommentNotification(
+        User receiver, //알림 받을 사람
+        User commenter, //댓글 작성자
+        Product product,    //상품
+        String comment) {  //댓글내용
+        // 자기가 자기 상품에 댓글 단 경우 알림 생성 안함
+        if (receiver.getUserId().equals(commenter.getUserId())) {
+            return null;
+        }
+
+        String message = String.format("%s님이 '%s' 상품에 댓글을 남겼습니다: %s",
+                commenter.getNickname(),
+                product.getTitle(),
+                comment.length() > 30 ? comment.substring(0, 30) + "..." : comment);
+
+        Notification notification = Notification.builder()
+                .receiver(receiver)
+                .sender(commenter)
+                .product(product)
+                .type(NotificationType.COMMENT)
+                .message(message)
+                .url("/products/" + product.getProductId())
+                .isRead(false)
+                .build();
+
+        Notification saved = notificationRepository.save(notification);
+
+
+        sendRealtimeNotification(saved);
+
+        return saved;
+    }
+
+    /**
+     * 사용자의 읽지 않은 알림 개수 조회
+     */
+    @Transactional(readOnly = true)
+    public long getUnreadCount(User user) {
+        return notificationRepository.countByReceiverAndIsRead(user, false);
+    }
+
+    /**
+     * 사용자의 모든 알림 조회 (최신순)
+     */
+    @Transactional(readOnly = true)
+    public List<Notification> getUserNotifications(User user) {
+        return notificationRepository.findByReceiverOrderByCreatedDateDesc(user);
+    }
+
+    /**
+     * 알림 읽음 처리
+     */
+    @Transactional
+    public void markAsRead(Long notificationId, User user) {
+        Notification notification = notificationRepository.findById(notificationId)
+                .orElseThrow(() -> new IllegalArgumentException("알림을 찾을 수 없습니다."));
+
+        // 본인의 알림인지 확인
+        if (!notification.getReceiver().getUserId().equals(user.getUserId())) {
+            throw new IllegalArgumentException("권한이 없습니다.");
+        }
+
+        if (!notification.getIsRead()) {
+            notification.markAsRead();
+            log.info("알림 읽음 처리 완료 - ID: {}", notificationId);
+        }
+    }
+
+    /**
+     * 모든 알림 읽음 처리
+     */
+    @Transactional
+    public void markAllAsRead(User user) {
+        List<Notification> unreadNotifications = notificationRepository
+                .findByReceiverAndIsRead(user, false);
+
+        unreadNotifications.forEach(Notification::markAsRead);
+        log.info("모든 알림 읽음 처리 완료 - 사용자: {}, 개수: {}",
+                user.getNickname(), unreadNotifications.size());
+    }
+
+    /**
+     * 알림 삭제
+     */
+    @Transactional
+    public void deleteNotification(Long notificationId, User user) {
+        Notification notification = notificationRepository.findById(notificationId)
+                .orElseThrow(() -> new IllegalArgumentException("알림을 찾을 수 없습니다."));
+
+        // 본인의 알림인지 확인
+        if (!notification.getReceiver().getUserId().equals(user.getUserId())) {
+            throw new IllegalArgumentException("권한이 없습니다.");
+        }
+
+        notificationRepository.delete(notification);
+        log.info("알림 삭제 완료 - ID: {}", notificationId);
+    }
+
+    /**
+     * 모든 알림 삭제
+     */
+    @Transactional
+    public void deleteAllNotifications(User user) {
+        notificationRepository.deleteByReceiver(user);
+        log.info("모든 알림 삭제 완료 - 사용자: {}", user.getNickname());
+    }
+    public List<Notification> getNotifications(User user) {
+        return notificationRepository.findByReceiverOrderByCreatedDateDesc(user);
+    }
+    /**
+     * 사용자의 최근 알림을 제한된 개수만큼 조회
+     *
+     * @param user 알림을 조회할 사용자 엔티티
+     * @param limit 조회할 알림의 최대 개수
+     * @return 최근 알림 목록 (생성일 기준 내림차순, 최대 limit개)
+     */
+    @Transactional(readOnly = true) // 읽기 전용 트랜잭션 (성능 최적화)
+    public List<Notification> getRecentNotifications(User user, int limit) {
+        // 해당 사용자의 모든 알림을 생성일 기준 내림차순으로 조회
+        List<Notification> allNotifications = notificationRepository
+                .findByReceiverOrderByCreatedDateDesc(user);
+
+        // 스트림을 사용하여 지정된 개수만큼만 반환
+        return allNotifications.stream()
+                .limit(limit) // 상위 limit개만 선택
+                .collect(Collectors.toList()); // 리스트로 수집하여 반환
+    }
+
+    // 🎯🔥✨💫⭐🌟 [추가] 신고 처리 완료 알림 생성 🌟⭐💫✨🔥🎯
+    /**
+     * 신고 처리 완료 알림 생성
+     * - 신고자에게 신고가 처리되었음을 알림
+     */
+    @Transactional
+    public Notification createReportResolvedNotification(Report report) {
+        User reporter = report.getReporter();
+        Product product = report.getProduct();
+
+        String message = String.format("신고하신 '%s' 상품에 대한 신고가 처리 완료되었습니다.",
+                product.getTitle());
+
+        Notification notification = Notification.builder()
+                .receiver(reporter)
+                .sender(null)  // Admin이 처리하므로 sender는 null
+                .product(product)
+                .type(NotificationType.TRANSACTION)
+                .message(message)
+                .url("/products/" + product.getProductId())
+                .isRead(false)
+                .build();
+
+        Notification saved = notificationRepository.save(notification);
+        log.info("신고 처리 알림 생성 완료 - ID: {}, 신고자: {}, 상품: {}",
+                saved.getNotificationId(), reporter.getNickname(), product.getTitle());
+
+        sendRealtimeNotification(saved);
+        return saved;
+    }
+
+    // ✅ 실시간 알림 전용 메서드 (topic + userId 방식)
+    private void sendRealtimeNotification(Notification notification) {
+        try {
+            NotificationDto dto = NotificationDto.fromEntity(notification);
+
+            Long receiverId = notification.getReceiver().getUserId();
+
+            // 1) 알림 상세용 (원래 쓰던 거 그대로)
+            String notificationDest = "/topic/notifications/" + receiverId;
+            messagingTemplate.convertAndSend(notificationDest, dto);
+
+            // 2) 🔥 알림 뱃지용 unreadCount 전송
+            long unreadCount = notificationRepository.countByReceiverAndIsRead(
+                    notification.getReceiver(),
+                    false
+            );
+
+            String countDest = "/topic/notifications-count/" + receiverId;
+            messagingTemplate.convertAndSend(countDest, unreadCount);
+
+            log.info("🔔 실시간 알림 전송 완료 - detailDest: {}, countDest: {}, type: {}, id: {}, unreadCount: {}",
+                    notificationDest, countDest, notification.getType(),
+                    notification.getNotificationId(), unreadCount);
+
+        } catch (Exception e) {
+            log.error("❌ 실시간 알림 전송 실패: {}", e.getMessage(), e);
+        }
+    }
+
+
+
+}

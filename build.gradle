@@ -1,0 +1,78 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.5.6'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.project'
+version = '0.0.2'
+description = 'gugumarket'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.thymeleaf.extras:thymeleaf-extras-springsecurity6'
+    // Spring Boot Starter Validation
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    // ModelMapper (Entity ↔ DTO 변환용)
+    implementation 'org.modelmapper:modelmapper:3.2.0'
+    // Apache Commons IO (파일 업로드용)
+    implementation 'commons-io:commons-io:2.15.1'
+    // Apache Commons FileUpload
+    implementation 'commons-fileupload:commons-fileupload:1.5'
+    compileOnly 'org.projectlombok:lombok'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+    annotationProcessor 'org.projectlombok:lombok'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    // Spring Boot DevTools (개발용)
+    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // JWT
+    implementation 'io.jsonwebtoken:jjwt-api:0.11.5'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.5'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.11.5'
+
+    // 🗺️ JSON 라이브러리 추가 (카카오 지도 API용)
+    implementation 'org.json:json:20230227'
+    // ✅ WebSocket & STOMP (Spring Boot 3.x 기준)
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
+
+    // ✅ JSON 처리 (이미 있을 수 있음)
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+    // ✅ SockJS (fallback 지원) - Optional but recommended
+    // implementation 'org.webjars:sockjs-client:1.5.1'
+    // implementation 'org.webjars:stomp-websocket:2.3.4'
+
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+jar {
+    enabled = false  // plain JAR 생성 비활성화
+}
+
+bootJar {
+    enabled = true   // 실행 가능한 JAR만 생성
+}
